@@ -1,0 +1,671 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Parameters": {
+        "1S3SourceBucket": {
+            "Type": "String",
+            "Default": "my-work-source",
+            "Description": "Which s3-bucket contains the artifacts?"
+        },
+        "2S3ObjectKey": {
+            "Type": "String",
+            "Default": "backend",
+            "Description": "Which main-directory in the s3-bucket contains the artifacts?"
+        },
+        "3TemplatePath": {
+            "Type": "String",
+            "Default": "amplify-appsync-files/c5a2fda7b69b16c3894bd8368a737676afd07dc3",
+            "Description": "Which subdirectory in s3-bucket/main-directory/ contains the cloudformation template?"
+        },
+        "4TemplateFileName": {
+            "Type": "String",
+            "Default": "cloudformation-template.json",
+            "Description": "What is the full filename (with extension) of the cloudformation template?"
+        },
+        "5PollForSourceChanges": {
+            "Type": "String",
+            "Default": "false",
+            "Description": "Is this true or false? Codepipeline will continuously poll s3-bucket for new versions of the artifacts    "
+        },
+        "6NotificationEmailAddress": {
+            "Type": "String",
+            "Default": "madhavanscrum@gmail.com",
+            "Description": "Who should receive notification emails from this pipeline?"
+        },
+        "7ApprovalEmailAddress": {
+            "Type": "String",
+            "Default": "madhavanscrum@gmail.com",
+            "Description": "Who should receive approval emails from this pipeline?"
+        }
+    },
+    "Resources": {
+        "S3BucketForPipelineArtifacts": {
+            "Type": "AWS::S3::Bucket",
+            "DeletionPolicy": "Retain",
+            "Properties": {
+                "BucketName": {
+                    "Fn::Sub": "${AWS::StackName}-codepipeline-bucket-${AWS::AccountId}"
+                },
+                "BucketEncryption": {
+                    "ServerSideEncryptionConfiguration": [
+                        {
+                            "ServerSideEncryptionByDefault": {
+                                "KMSMasterKeyID": {
+                                    "Fn::GetAtt": [
+                                        "KMSKey",
+                                        "Arn"
+                                    ]
+                                },
+                                "SSEAlgorithm": "aws:kms"
+                            }
+                        }
+                    ]
+                }
+            },
+            "DependsOn": [
+                "KMSKey"
+            ]
+        },
+        "KMSKey": {
+            "Type": "AWS::KMS::Key",
+            "Properties": {
+                "Enabled": "true",
+                "EnableKeyRotation": "false",
+                "KeyUsage": "ENCRYPT_DECRYPT",
+                "PendingWindowInDays": "7",
+                "KeyPolicy": {
+                    "Version": "2012-10-17",
+                    "Id": "key-default-1",
+                    "Statement": [
+                        {
+                            "Sid": "Enable IAM User Permissions",
+                            "Effect": "Allow",
+                            "Principal": {
+                                "AWS": {
+                                    "Fn::Sub": "arn:aws:iam::${AWS::AccountId}:root"
+                                }
+                            },
+                            "Action": "kms:*",
+                            "Resource": "*"
+                        },
+                        {
+                            "Sid": "Allow administration of the key",
+                            "Effect": "Allow",
+                            "Principal": {
+                                "AWS": [
+                                    "*"
+                                ]
+                            },
+                            "Action": [
+                                "kms:Create*",
+                                "kms:Describe*",
+                                "kms:Enable*",
+                                "kms:List*",
+                                "kms:Put*",
+                                "kms:Update*",
+                                "kms:Revoke*",
+                                "kms:Disable*",
+                                "kms:Get*",
+                                "kms:Delete*",
+                                "kms:ScheduleKeyDeletion",
+                                "kms:CancelKeyDeletion"
+                            ],
+                            "Resource": "*"
+                        },
+                        {
+                            "Sid": "Allow use of the key",
+                            "Effect": "Allow",
+                            "Principal": {
+                                "AWS": [
+                                    "*"
+                                ]
+                            },
+                            "Action": [
+                                "kms:DescribeKey",
+                                "kms:Encrypt",
+                                "kms:Decrypt",
+                                "kms:ReEncrypt*",
+                                "kms:GenerateDataKey",
+                                "kms:GenerateDataKeyWithoutPlaintext"
+                            ],
+                            "Resource": "*"
+                        }
+                    ]
+                }
+            }
+        },
+        "Pipeline": {
+            "Type": "AWS::CodePipeline::Pipeline",
+            "Properties": {
+                "Name": {
+                    "Fn::Sub": "${AWS::StackName}-codepipeline-${AWS::AccountId}"
+                },
+                "RoleArn": {
+                    "Fn::GetAtt": [
+                        "CodePipelineRole",
+                        "Arn"
+                    ]
+                },
+                "ArtifactStore": {
+                    "Location": {
+                        "Ref": "S3BucketForPipelineArtifacts"
+                    },
+                    "Type": "S3",
+                    "EncryptionKey": {
+                        "Id": {
+                            "Fn::GetAtt": [
+                                "KMSKey",
+                                "Arn"
+                            ]
+                        },
+                        "Type": "KMS"
+                    }
+                },
+                "Stages": [
+                    {
+                        "Name": "Source",
+                        "Actions": [
+                            {
+                                "Name": "Source",
+                                "Region": "us-east-1",
+                                "ActionTypeId": {
+                                    "Category": "Source",
+                                    "Owner": "AWS",
+                                    "Provider": "S3",
+                                    "Version": "1"
+                                },
+                                "Configuration": {
+                                    "S3Bucket": {
+                                        "Ref": "1S3SourceBucket"
+                                    },
+                                    "PollForSourceChanges": {
+                                        "Ref": "5PollForSourceChanges"
+                                    },
+                                    "S3ObjectKey": {
+                                        "Fn::Sub": "${2S3ObjectKey}.zip"
+                                    }
+                                },
+                                "OutputArtifacts": [
+                                    {
+                                        "Name": "SourceArtifacts"
+                                    }
+                                ],
+                                "RunOrder": 1
+                            }
+                        ]
+                    },
+                    {
+                        "Name": "Deploy",
+                        "Actions": [
+                            {
+                                "InputArtifacts": [
+                                    {
+                                        "Name": "SourceArtifacts"
+                                    }
+                                ],
+                                "Name": "Deploy",
+                                "Region": "us-east-1",
+                                "Namespace": "DeployVariables",
+                                "ActionTypeId": {
+                                    "Category": "Deploy",
+                                    "Owner": "AWS",
+                                    "Version": "1",
+                                    "Provider": "CloudFormation"
+                                },
+                                "OutputArtifacts": [],
+                                "Configuration": {
+                                    "ActionMode": "CREATE_UPDATE",
+                                    "RoleArn": {
+                                        "Fn::GetAtt": [
+                                            "CodePipelineRole",
+                                            "Arn"
+                                        ]
+                                    },
+                                    "Capabilities": "CAPABILITY_IAM,CAPABILITY_AUTO_EXPAND,CAPABILITY_NAMED_IAM",
+                                    "StackName": {
+                                        "Fn::Sub": "${AWS::StackName}-stack-${AWS::AccountId}"
+                                    },
+                                    "ParameterOverrides": {
+                                        "Fn::Sub": "{\"S3DeploymentBucket\":\"${1S3SourceBucket}\", \"S3DeploymentRootKey\":\"${2S3ObjectKey}/${3TemplatePath}\"}"
+                                    },
+                                    "TemplatePath": {
+                                        "Fn::Sub": "SourceArtifacts::${3TemplatePath}/${4TemplateFileName}"
+                                    }
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "Name": "release-approval",
+                        "Actions": [
+                            {
+                                "Name": "transition",
+                                "ActionTypeId": {
+                                    "Category": "Approval",
+                                    "Owner": "AWS",
+                                    "Provider": "Manual",
+                                    "Version": "1"
+                                },
+                                "RunOrder": 1,
+                                "Configuration": {
+                                    "CustomData": {
+                                        "Fn::Sub": "Approve https://${ApprovalLambdaApiGatewayRestApi}.execute-api.${AWS::Region}.amazonaws.com/${ApprovalLambdaApiGatewayStage}/pipeline-approval?action=Approved&pipeline=${AWS::StackName}-codepipeline-${AWS::AccountId}&stage=release-approval&pipelineexecutionid=#{codepipeline.PipelineExecutionId} or Reject https://${ApprovalLambdaApiGatewayRestApi}.execute-api.${AWS::Region}.amazonaws.com/${ApprovalLambdaApiGatewayStage}/pipeline-approval?action=Rejected&pipeline=${AWS::StackName}-codepipeline-${AWS::AccountId}&stage=release-approval&pipelineexecutionid=#{codepipeline.PipelineExecutionId}"
+                                    },
+                                    "ExternalEntityLink": "http://www.google.com",
+                                    "NotificationArn": {
+                                        "Ref": "NotificationSNSTopic"
+                                    }
+                                },
+                                "OutputArtifacts": [],
+                                "InputArtifacts": [],
+                                "Region": {
+                                    "Ref": "AWS::Region"
+                                }
+                            }
+                        ]
+                    }
+                ]
+            },
+            "DependsOn": [
+                "KMSKey"
+            ]
+        },
+        "CodePipelineRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "RoleName": {
+                    "Fn::Sub": "${AWS::StackName}-codepipeline-role-${AWS::AccountId}"
+                },
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": [
+                                    "codepipeline.amazonaws.com",
+                                    "cloudformation.amazonaws.com",
+                                    "sns.amazonaws.com"
+                                ]
+                            },
+                            "Action": [
+                                "sts:AssumeRole"
+                            ]
+                        }
+                    ]
+                },
+                "Policies": [
+                    {
+                        "PolicyName": "permissionsfortherole",
+                        "PolicyDocument": {
+                            "Version": "2012-10-17",
+                            "Statement": [
+                                {
+                                    "Effect": "Allow",
+                                    "Action": "*",
+                                    "Resource": "*"
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        "EventRule": {
+            "Type": "AWS::Events::Rule",
+            "Properties": {
+                "Description": "EventRule",
+                "EventPattern": {
+                    "source": [
+                        "aws.codepipeline"
+                    ],
+                    "detail-type": [
+                        "CodePipeline Pipeline Execution State Change",
+                        "CodePipeline Action Execution State Change",
+                        "CodePipeline Stage Execution State Change"
+                    ],
+                    "detail": {
+                        "pipeline": [
+                            {
+                                "Fn::Sub": "${AWS::StackName}-codepipeline-${AWS::AccountId}"
+                            }
+                        ]
+                    }
+                },
+                "State": "ENABLED",
+                "Targets": [
+                    {
+                        "Arn": {
+                            "Ref": "NotificationSNSTopic"
+                        },
+                        "Id": "PipelineNotificationTopic",
+                        "InputTransformer": {
+                            "InputTemplate": "\"The pipeline: <pipeline>, stage: <stage> has <state>. For more information https://console.aws.amazon.com/codepipeline/home?region=us-east-1#/view/<pipeline>\" ",
+                            "InputPathsMap": {
+                                "pipeline": "$.detail.pipeline",
+                                "stage": "$.detail.stage",
+                                "state": "$.detail.state"
+                            }
+                        }
+                    }
+                ]
+            },
+            "DependsOn": [
+                "NotificationSNSTopic"
+            ]
+        },
+        "NotificationSNSTopic": {
+            "Type": "AWS::SNS::Topic",
+            "Properties": {
+                "Subscription": [
+                    {
+                        "Endpoint": {
+                            "Ref": "6NotificationEmailAddress"
+                        },
+                        "Protocol": "email"
+                    }
+                ]
+            }
+        },
+        "ApprovalSNSTopic": {
+            "Type": "AWS::SNS::Topic",
+            "Properties": {
+                "Subscription": [
+                    {
+                        "Endpoint": {
+                            "Ref": "7ApprovalEmailAddress"
+                        },
+                        "Protocol": "email"
+                    }
+                ]
+            }
+        },
+        "SNSPolicy": {
+            "Type": "AWS::SNS::TopicPolicy",
+            "Properties": {
+                "PolicyDocument": {
+                    "Fn::Sub": "{\n  \"Version\": \"2008-10-17\",\n  \"Id\": \"__default_policy_ID\",\n  \"Statement\": [\n    {\n      \"Sid\": \"__default_statement_ID\",\n      \"Effect\": \"Allow\",\n      \"Principal\": {\n        \"AWS\": \"*\"\n      },\n      \"Action\": [\n        \"SNS:GetTopicAttributes\",\n        \"SNS:SetTopicAttributes\",\n        \"SNS:AddPermission\",\n        \"SNS:RemovePermission\",\n        \"SNS:DeleteTopic\",\n        \"SNS:Subscribe\",\n        \"SNS:ListSubscriptionsByTopic\",\n        \"SNS:Publish\",\n        \"SNS:Receive\"\n      ],\n      \"Resource\": \"*\",\n      \"Condition\": {\n        \"StringEquals\": {\n          \"AWS:SourceOwner\": \"966033364941\"\n        }\n      }\n    },\n    {\n      \"Sid\": \"event_permission\",\n      \"Effect\": \"Allow\",\n      \"Principal\": {\n        \"Service\": [\"events.amazonaws.com\",\"codepipeline.amazonaws.com\"]\n      },\n      \"Action\": \"sns:Publish\",\n      \"Resource\": \"*\"\n    }\n  ]\n}      "
+                },
+                "Topics": [
+                    {
+                        "Ref": "NotificationSNSTopic"
+                    },
+                    {
+                        "Ref": "ApprovalSNSTopic"
+                    }
+                ]
+            },
+            "DependsOn": [
+                "NotificationSNSTopic",
+                "ApprovalSNSTopic",
+                "EventRule"
+            ]
+        },
+        "ApprovalLambda": {
+            "Type": "AWS::Lambda::Function",
+            "Properties": {
+                "Handler": "index.handler",
+                "Role": {
+                    "Fn::GetAtt": [
+                        "LambdaRole",
+                        "Arn"
+                    ]
+                },
+                "Runtime": "python3.7",
+                "Description": {
+                    "Fn::Sub": "Lambda to approve stages in pipelines"
+                },
+                "FunctionName": {
+                    "Fn::Sub": "${AWS::StackName}-${AWS::AccountId}-pipelineApprovalLambda"
+                },
+                "Code": {
+                    "ZipFile": "import json\nimport logging\nimport re\nimport time\nimport boto3\n\nlogger = logging.getLogger(__name__)\nlogger.setLevel(logging.INFO)\nMAX_WAIT_FOR_RESPONSE = 10\nWAIT_INCREMENT = 1\n\ndef handler(event, context):\n  logger.info('REQUEST RECEIVED:\\n %s', event)\n  logger.info('REQUEST RECEIVED:\\n %s', context)\n  pipeline = event[\"queryStringParameters\"]['pipeline']\n  stage = event[\"queryStringParameters\"]['stage']\n  action = event[\"queryStringParameters\"]['action']\n  approval_action = 'transition'\n  pipelineexecutionid = event[\"queryStringParameters\"]['pipelineexecutionid']\n  client = boto3.client('codepipeline')\n  r = client.get_pipeline_state(name=pipeline)['stageStates']\n  print(r)\n  s = next((x for x in r if x['stageName'] == stage and x['latestExecution']['pipelineExecutionId'] == pipelineexecutionid ), None)\n  print(s)\n  s1 = s['actionStates']\n  print(s1)\n  s2 = next((y for y in s1 if y['actionName'] == approval_action ), None)\n  print(s2)\n  t = s2['latestExecution']['token']\n  print(t)\n  client.put_approval_result(\n      pipelineName=pipeline,\n      stageName=stage,\n      actionName=approval_action,\n      result={\n          'summary': 'Automatically approved by Lambda.',\n          'status': action\n      },\n      token=t\n  )\n  logger.info(\"Status message: %s\", client.put_approval_result)\n  if action == 'Approved':\n    return {\"statusCode\": 200, \"body\": json.dumps('Thank you for approving the release!!')}\n  elif action == 'Rejected':\n    return {\"statusCode\": 200, \"body\": json.dumps('Thank you for rejecting the release!!')}"
+                }
+            },
+            "DependsOn": [
+                "LambdaRole"
+            ]
+        },
+        "LambdaRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": [
+                                    "lambda.amazonaws.com"
+                                ]
+                            },
+                            "Action": [
+                                "sts:AssumeRole"
+                            ]
+                        }
+                    ]
+                },
+                "Path": "/",
+                "Policies": [
+                    {
+                        "PolicyName": "lambdas3",
+                        "PolicyDocument": {
+                            "Version": "2012-10-17",
+                            "Statement": [
+                                {
+                                    "Effect": "Allow",
+                                    "Action": "logs:CreateLogGroup",
+                                    "Resource": {
+                                        "Fn::Sub": "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*"
+                                    }
+                                },
+                                {
+                                    "Effect": "Allow",
+                                    "Action": "s3:*",
+                                    "Resource": "*"
+                                },
+                                {
+                                    "Effect": "Allow",
+                                    "Action": "*",
+                                    "Resource": "*"
+                                },
+                                {
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "logs:CreateLogStream",
+                                        "logs:PutLogEvents"
+                                    ],
+                                    "Resource": [
+                                        {
+                                            "Fn::Sub": "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*"
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        "ApprovalLambdaApiGatewayRestApi": {
+            "Type": "AWS::ApiGateway::RestApi",
+            "Properties": {
+                "ApiKeySourceType": "HEADER",
+                "Description": "An API Gateway to integrate with pipelineApprovalLambda",
+                "EndpointConfiguration": {
+                    "Types": [
+                        "REGIONAL"
+                    ]
+                },
+                "Name": {
+                    "Fn::Sub": "${AWS::StackName}-${AWS::AccountId}-pipelineApprovalLambda-api"
+                }
+            },
+            "DependsOn": [
+                "ApprovalLambda"
+            ]
+        },
+        "ApprovalLambdaApiGatewayResource": {
+            "Type": "AWS::ApiGateway::Resource",
+            "Properties": {
+                "ParentId": {
+                    "Fn::GetAtt": [
+                        "ApprovalLambdaApiGatewayRestApi",
+                        "RootResourceId"
+                    ]
+                },
+                "PathPart": "pipeline-approval",
+                "RestApiId": {
+                    "Ref": "ApprovalLambdaApiGatewayRestApi"
+                }
+            },
+            "DependsOn": [
+                "ApprovalLambda"
+            ]
+        },
+        "ApprovalLambdaApiGatewayMethod": {
+            "Type": "AWS::ApiGateway::Method",
+            "Properties": {
+                "ApiKeyRequired": false,
+                "AuthorizationType": "NONE",
+                "HttpMethod": "GET",
+                "RequestParameters": {
+                    "method.request.querystring.action": true,
+                    "method.request.querystring.pipeline": true,
+                    "method.request.querystring.pipelineexecutionid": true,
+                    "method.request.querystring.stage": true
+                },
+                "Integration": {
+                    "ConnectionType": "INTERNET",
+                    "Credentials": {
+                        "Fn::GetAtt": [
+                            "ApprovalLambdaApiGatewayIamRole",
+                            "Arn"
+                        ]
+                    },
+                    "IntegrationHttpMethod": "POST",
+                    "PassthroughBehavior": "WHEN_NO_MATCH",
+                    "TimeoutInMillis": 29000,
+                    "Type": "AWS_PROXY",
+                    "Uri": {
+                        "Fn::Sub": "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ApprovalLambda.Arn}/invocations"
+                    }
+                },
+                "OperationName": "lambda",
+                "ResourceId": {
+                    "Ref": "ApprovalLambdaApiGatewayResource"
+                },
+                "RestApiId": {
+                    "Ref": "ApprovalLambdaApiGatewayRestApi"
+                }
+            },
+            "DependsOn": [
+                "ApprovalLambda"
+            ]
+        },
+        "ApprovalLambdaApiGatewayModel": {
+            "Type": "AWS::ApiGateway::Model",
+            "Properties": {
+                "ContentType": "application/json",
+                "RestApiId": {
+                    "Ref": "ApprovalLambdaApiGatewayRestApi"
+                },
+                "Schema": {}
+            },
+            "DependsOn": [
+                "ApprovalLambda"
+            ]
+        },
+        "ApprovalLambdaApiGatewayStage": {
+            "Type": "AWS::ApiGateway::Stage",
+            "Properties": {
+                "DeploymentId": {
+                    "Ref": "ApprovalLambdaApiGatewayDeployment"
+                },
+                "Description": "Approval Lambda API Stage v0",
+                "RestApiId": {
+                    "Ref": "ApprovalLambdaApiGatewayRestApi"
+                },
+                "StageName": "v0"
+            },
+            "DependsOn": [
+                "ApprovalLambda"
+            ]
+        },
+        "ApprovalLambdaApiGatewayDeployment": {
+            "Type": "AWS::ApiGateway::Deployment",
+            "Properties": {
+                "Description": "Approval Lambda API Deployment",
+                "RestApiId": {
+                    "Ref": "ApprovalLambdaApiGatewayRestApi"
+                }
+            },
+            "DependsOn": [
+                "ApprovalLambda",
+                "ApprovalLambdaApiGatewayMethod"
+            ]
+        },
+        "ApprovalLambdaApiGatewayIamRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Sid": "",
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": [
+                                    "apigateway.amazonaws.com"
+                                ]
+                            },
+                            "Action": [
+                                "sts:AssumeRole"
+                            ]
+                        }
+                    ]
+                },
+                "Path": "/",
+                "Policies": [
+                    {
+                        "PolicyName": "LambdaAccess",
+                        "PolicyDocument": {
+                            "Version": "2012-10-17",
+                            "Statement": [
+                                {
+                                    "Effect": "Allow",
+                                    "Action": "*",
+                                    "Resource": "*"
+                                }
+                            ]
+                        }
+                    }
+                ]
+            },
+            "DependsOn": [
+                "ApprovalLambda"
+            ]
+        },
+        "ConfigLambdaPermission": {
+            "Type": "AWS::Lambda::Permission",
+            "DependsOn": [
+                "ApprovalLambdaApiGatewayRestApi",
+                "ApprovalLambda"
+            ],
+            "Properties": {
+                "Action": "lambda:InvokeFunction",
+                "FunctionName": {
+                    "Ref": "ApprovalLambda"
+                },
+                "Principal": "apigateway.amazonaws.com"
+            }
+        }
+    },
+    "Outputs": {
+        "CodePipelineUrl": {
+            "Value": {
+                "Fn::Sub": "https://console.aws.amazon.com/codepipeline/home?region=${AWS::Region}#/view/${Pipeline}"
+            },
+            "Description": "CodePipeline URL"
+        }
+    }
+}
