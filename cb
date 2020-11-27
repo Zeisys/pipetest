@@ -1,0 +1,54 @@
+ ConfigureStageAction:
+    Type: 'AWS::CodeBuild::Project'
+    Properties:
+      Name: !Sub '${AWS::StackName}-codepipeline-${AWS::AccountId}-configure'
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: !Sub |-
+          version: 0.2
+
+          phases:
+            build:
+              commands:
+                - ls
+                - sed -i -e "s~${A4GraphQLApiUrlPlaceholder}~$GraphQLApiUrl~g" ./main.js
+                - sed -i -e "s~${A4GraphQLApiUrlPlaceholder}~$GraphQLApiUrl~g" ./main.js.map
+                - sed -i -e "s~${A5GraphQLApiKeyPlaceholder}~$GraphQLApiKey~g" ./main.js
+                - sed -i -e "s~${A5GraphQLApiKeyPlaceholder}~$GraphQLApiKey~g" ./main.js.map
+          artifacts:
+            files:
+              - '**/*'
+        InsecureSsl: false
+      SecondarySourceVersions: []
+      Artifacts:
+        Type: CODEPIPELINE
+        Packaging: NONE
+        EncryptionDisabled: false
+      Cache:
+        Type: NO_CACHE
+      Environment:
+        Type: LINUX_CONTAINER
+        Image: 'aws/codebuild/amazonlinux2-x86_64-standard:3.0'
+        ComputeType: BUILD_GENERAL1_SMALL
+        EnvironmentVariables: []
+        PrivilegedMode: false
+        ImagePullCredentialsType: CODEBUILD
+      ServiceRole: !GetAtt 
+        - CodePipelineRole
+        - Arn
+      TimeoutInMinutes: 60
+      QueuedTimeoutInMinutes: 480
+      EncryptionKey: !GetAtt 
+        - KMSKey
+        - Arn
+      Tags: []
+      BadgeEnabled: false
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+        S3Logs:
+          Status: DISABLED
+          EncryptionDisabled: false
+    DependsOn:
+      - KMSKey
+      - CodePipelineRole
